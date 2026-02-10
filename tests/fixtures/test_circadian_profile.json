@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-02-10T12:00:00",
+  "disclaimer": "NOT MEDICAL ADVICE",
+  "chronotype_profile": {
+    "me_score": -1,
+    "me_label": "Evening Tendency",
+    "rhythm_strength": 2,
+    "rhythm_label": "Robust",
+    "sleep_pressure": 1,
+    "sleep_pressure_label": "Elevated",
+    "metabolic_sensitivity": 0,
+    "metabolic_sensitivity_label": "Normal",
+    "caffeine_sensitivity": 1,
+    "caffeine_sensitivity_label": "Normal"
+  }
+}

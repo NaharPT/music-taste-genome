@@ -1,0 +1,19 @@
+# Environment
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Data
+data/cache/
+data/profiles/
+reports/*.md
+reports/*.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
