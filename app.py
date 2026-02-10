@@ -3,6 +3,7 @@
 Map your Spotify listening patterns against your actual genome.
 """
 
+import base64
 import json
 import os
 import secrets
@@ -76,14 +77,26 @@ auth_code = query_params.get("code")
 returned_state = query_params.get("state")
 
 if auth_code and st.session_state.access_token is None:
-    # We got a callback from Spotify
-    if st.session_state.code_verifier:
+    # Decode code_verifier from the state parameter (survives redirect)
+    code_verifier = None
+    if returned_state:
+        try:
+            decoded = base64.urlsafe_b64decode(returned_state + "==").decode("utf-8")
+            if "|" in decoded:
+                code_verifier = decoded.split("|", 1)[1]
+        except Exception:
+            pass
+    # Fall back to session state if decode fails
+    if not code_verifier:
+        code_verifier = st.session_state.code_verifier
+
+    if code_verifier:
         try:
             token_data = exchange_code_for_token(
                 CLIENT_ID,
                 REDIRECT_URI,
                 auth_code,
-                st.session_state.code_verifier,
+                code_verifier,
             )
             st.session_state.access_token = token_data["access_token"]
             st.session_state.refresh_token = token_data.get("refresh_token")
@@ -93,6 +106,8 @@ if auth_code and st.session_state.access_token is None:
             st.rerun()
         except Exception as e:
             st.error(f"Authentication failed: {e}")
+    else:
+        st.error("Session expired during login. Please try again.")
 
 # ---------------------------------------------------------------------------
 # Sidebar
@@ -157,7 +172,11 @@ if st.session_state.step == "connect" and st.session_state.access_token is None:
         else:
             # Generate PKCE pair and auth URL
             code_verifier, code_challenge = generate_pkce_pair()
-            state = secrets.token_urlsafe(16)
+            # Encode verifier into state so it survives the redirect
+            nonce = secrets.token_urlsafe(8)
+            state = base64.urlsafe_b64encode(
+                f"{nonce}|{code_verifier}".encode("utf-8")
+            ).decode("utf-8").rstrip("=")
             st.session_state.code_verifier = code_verifier
             st.session_state.auth_state = state
 
