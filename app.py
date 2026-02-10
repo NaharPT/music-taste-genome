@@ -4,6 +4,7 @@ Map your Spotify listening patterns against your actual genome.
 """
 
 import json
+import os
 import secrets
 
 import streamlit as st
@@ -33,9 +34,15 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 # Secrets / config
 # ---------------------------------------------------------------------------
-CLIENT_ID = st.secrets.get("SPOTIFY_CLIENT_ID", "")
-# Build redirect URI from the app's own URL
-REDIRECT_URI = st.secrets.get("REDIRECT_URI", "http://localhost:8501")
+# Support both st.secrets (Streamlit Cloud) and env vars (HF Spaces)
+def _get_secret(key, default=""):
+    try:
+        return st.secrets[key]
+    except (KeyError, FileNotFoundError):
+        return os.environ.get(key, default)
+
+CLIENT_ID = _get_secret("SPOTIFY_CLIENT_ID")
+REDIRECT_URI = _get_secret("REDIRECT_URI", "http://localhost:8501")
 
 
 # ---------------------------------------------------------------------------
