@@ -255,13 +255,27 @@ elif st.session_state.step == "collecting":
             features = audio_features.get(track["track_id"])
             track["audio_features"] = features if features else None
 
-        # Filter tracks with features
+        # Extract unique artist IDs for genre profiling
+        progress.progress(85, text="Fetching artist details for genre profiling...")
+        unique_artist_ids = set()
+        for track in unique_tracks:
+            if "artist_ids" in track:
+                unique_artist_ids.update(track["artist_ids"])
+
+        artist_details = {}
+        if unique_artist_ids:
+            artist_details = collector.get_artist_details(list(unique_artist_ids))
+
+        # Filter tracks with features (or use all if no features available)
         tracks_with_features = [t for t in unique_tracks if t.get("audio_features")]
+        if not tracks_with_features:
+            # No audio features available - use all tracks for genre analysis
+            tracks_with_features = unique_tracks
 
         progress.progress(90, text="Building sonic DNA...")
 
-        # Build sonic DNA
-        sonic_dna = build_sonic_dna(tracks_with_features)
+        # Build sonic DNA with artist details for genre profiling
+        sonic_dna = build_sonic_dna(tracks_with_features, artist_details=artist_details)
 
         # Temporal analysis
         timestamped = [t for t in tracks_with_features if t.get("played_at")]
@@ -294,12 +308,13 @@ elif st.session_state.step == "collecting":
         st.session_state.spotify_data = {
             "tracks": tracks_with_features,
             "total": len(unique_tracks),
-            "with_features": len(tracks_with_features),
+            "with_features": len([t for t in tracks_with_features if t.get("audio_features")]),
         }
         st.session_state.sonic_dna = sonic_dna
         st.session_state.temporal = temporal
         st.session_state.genome_context = genome_context
         st.session_state.correlations = correlations
+        st.session_state.artist_details = artist_details
         st.session_state.step = "results"
 
         progress.progress(100, text="Done!")
@@ -334,26 +349,57 @@ elif st.session_state.step == "results":
     # ---- Sonic DNA Signature ----
     st.subheader("Your Sonic DNA Signature")
     signature = sonic.get("signature", {})
+    genre_profile = sonic.get("genre_profile", {})
 
-    sig_cols = st.columns(5)
-    dim_icons = {
-        "emotional_tone": "Emotional Tone",
-        "energy_level": "Energy Level",
-        "musical_complexity": "Musical Complexity",
-        "tempo_preference": "Tempo Preference",
-        "diversity": "Diversity",
-    }
-    for i, (key, display_name) in enumerate(dim_icons.items()):
-        dim = signature.get(key, {})
-        with sig_cols[i]:
-            val = dim.get("value", 0)
-            label = dim.get("label", "?")
-            if key == "tempo_preference":
-                st.metric(display_name, f"{val:.0f} BPM", label)
-            elif key == "diversity":
-                st.metric(display_name, f"{val}/100", label)
-            else:
-                st.metric(display_name, f"{val:.2f}", label)
+    # Check if we have audio feature-based signature
+    has_audio_features = signature and any(
+        signature.get(k, {}).get("value") for k in ["emotional_tone", "energy_level", "musical_complexity", "tempo_preference"]
+    )
+
+    if has_audio_features:
+        sig_cols = st.columns(5)
+        dim_icons = {
+            "emotional_tone": "Emotional Tone",
+            "energy_level": "Energy Level",
+            "musical_complexity": "Musical Complexity",
+            "tempo_preference": "Tempo Preference",
+            "diversity": "Diversity",
+        }
+        for i, (key, display_name) in enumerate(dim_icons.items()):
+            dim = signature.get(key, {})
+            with sig_cols[i]:
+                val = dim.get("value", 0)
+                label = dim.get("label", "?")
+                if key == "tempo_preference":
+                    st.metric(display_name, f"{val:.0f} BPM", label)
+                elif key == "diversity":
+                    st.metric(display_name, f"{val}/100", label)
+                else:
+                    st.metric(display_name, f"{val:.2f}", label)
+    elif genre_profile:
+        # Show genre-based signature when audio features unavailable
+        st.info("Audio features unavailable for new Spotify apps. Showing genre-based profile instead.")
+
+        sig_cols = st.columns(4)
+
+        with sig_cols[0]:
+            top_genres = genre_profile.get("top_genres", [])
+            if top_genres:
+                st.metric("Top Genre", top_genres[0].get("genre", "?").title(), f"{top_genres[0].get('pct', 0):.0f}%")
+
+        with sig_cols[1]:
+            macro = genre_profile.get("macro_categories", {})
+            if macro:
+                top_macro = max(macro.items(), key=lambda x: x[1])
+                st.metric("Dominant Category", top_macro[0].title(), f"{top_macro[1]:.0f}%")
+
+        with sig_cols[2]:
+            diversity = genre_profile.get("genre_diversity", 0)
+            st.metric("Genre Diversity", f"{diversity:.2f}", "Shannon Index")
+
+        with sig_cols[3]:
+            total_genres = len(top_genres)
+            st.metric("Unique Genres", total_genres)
 
     st.divider()
 
@@ -366,65 +412,122 @@ elif st.session_state.step == "results":
 
     with tab_features:
         features = sonic.get("audio_features", {})
+        genre_profile = sonic.get("genre_profile", {})
 
-        # Radar chart of core features
-        feature_names = ["Energy", "Valence", "Danceability", "Acousticness", "Instrumentalness", "Speechiness", "Liveness"]
-        feature_keys = ["energy", "valence", "danceability", "acousticness", "instrumentalness", "speechiness", "liveness"]
-        values = [features.get(k, {}).get("median", 0) for k in feature_keys]
+        # Check if we have actual audio features
+        has_features = features and any(features.get(k, {}).get("median") for k in ["energy", "valence", "danceability"])
 
-        fig_radar = go.Figure(data=go.Scatterpolar(
-            r=values + [values[0]],  # close the shape
-            theta=feature_names + [feature_names[0]],
-            fill="toself",
-            fillcolor="rgba(29, 185, 84, 0.3)",
-            line=dict(color="#1DB954", width=2),
-        ))
-        fig_radar.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-            showlegend=False,
-            title="Audio Feature Radar",
-            height=450,
-        )
-        st.plotly_chart(fig_radar, use_container_width=True)
+        if has_features:
+            # Radar chart of core features
+            feature_names = ["Energy", "Valence", "Danceability", "Acousticness", "Instrumentalness", "Speechiness", "Liveness"]
+            feature_keys = ["energy", "valence", "danceability", "acousticness", "instrumentalness", "speechiness", "liveness"]
+            values = [features.get(k, {}).get("median", 0) for k in feature_keys]
 
-        # Feature distributions
-        col_left, col_right = st.columns(2)
+            fig_radar = go.Figure(data=go.Scatterpolar(
+                r=values + [values[0]],  # close the shape
+                theta=feature_names + [feature_names[0]],
+                fill="toself",
+                fillcolor="rgba(29, 185, 84, 0.3)",
+                line=dict(color="#1DB954", width=2),
+            ))
+            fig_radar.update_layout(
+                polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
+                showlegend=False,
+                title="Audio Feature Radar",
+                height=450,
+            )
+            st.plotly_chart(fig_radar, use_container_width=True)
+        elif genre_profile:
+            # Show genre-based profile when audio features unavailable
+            st.warning("Spotify audio features unavailable for new apps. Showing genre-based profile instead.")
 
-        with col_left:
-            # Tempo distribution
-            tempo = features.get("tempo", {})
-            if tempo:
-                st.metric("Tempo", f"{tempo.get('median', 0):.0f} BPM",
-                          f"Range: {tempo.get('min', 0):.0f} - {tempo.get('max', 0):.0f}")
-
-            # Mode split
-            mode = features.get("mode_split", {})
-            if mode:
-                fig_mode = go.Figure(data=go.Pie(
-                    labels=["Major", "Minor"],
-                    values=[mode.get("major", 0), mode.get("minor", 0)],
-                    marker_colors=["#1DB954", "#535353"],
-                    hole=0.4,
-                ))
-                fig_mode.update_layout(title="Major vs Minor", height=300)
-                st.plotly_chart(fig_mode, use_container_width=True)
-
-        with col_right:
-            # Key distribution
-            key_dist = features.get("key_distribution", {})
-            if key_dist:
-                fig_keys = go.Figure(data=go.Bar(
-                    x=list(key_dist.keys()),
-                    y=list(key_dist.values()),
+            # Top 15 genres horizontal bar chart
+            top_genres = genre_profile.get("top_genres", [])[:15]
+            if top_genres:
+                fig_genres = go.Figure(data=go.Bar(
+                    x=[g["pct"] for g in top_genres],
+                    y=[g["genre"].title() for g in top_genres],
+                    orientation="h",
                     marker_color="#1DB954",
+                    text=[f"{g['count']} tracks" for g in top_genres],
+                    textposition="auto",
                 ))
-                fig_keys.update_layout(
-                    title="Key Distribution",
-                    xaxis_title="Key",
-                    yaxis_title="Frequency",
-                    height=350,
+                fig_genres.update_layout(
+                    title="Top 15 Genres",
+                    xaxis_title="Percentage of Tracks",
+                    yaxis_title="",
+                    height=500,
+                    yaxis=dict(autorange="reversed"),
                 )
-                st.plotly_chart(fig_keys, use_container_width=True)
+                st.plotly_chart(fig_genres, use_container_width=True)
+
+            # Macro categories pie chart and diversity
+            col_left, col_right = st.columns(2)
+
+            with col_left:
+                macro = genre_profile.get("macro_categories", {})
+                if macro:
+                    # Sort by percentage for better visualization
+                    sorted_macro = sorted(macro.items(), key=lambda x: x[1], reverse=True)
+                    labels = [k.title() for k, v in sorted_macro]
+                    values = [v for k, v in sorted_macro]
+
+                    fig_macro = go.Figure(data=go.Pie(
+                        labels=labels,
+                        values=values,
+                        marker_colors=["#1DB954", "#535353", "#282828", "#B3B3B3", "#191414"],
+                        hole=0.4,
+                    ))
+                    fig_macro.update_layout(title="Genre Categories", height=400)
+                    st.plotly_chart(fig_macro, use_container_width=True)
+
+            with col_right:
+                diversity = genre_profile.get("genre_diversity", 0)
+                st.metric("Genre Diversity Score", f"{diversity:.3f}", "Shannon Entropy")
+                st.caption("Higher values indicate more diverse genre exploration. Max theoretical value is around 4-5 for broad listening.")
+
+                total_genres = len(genre_profile.get("top_genres", []))
+                st.metric("Total Unique Genres", total_genres)
+
+        # Feature distributions (only show if we have audio features)
+        if has_features:
+            col_left, col_right = st.columns(2)
+
+            with col_left:
+                # Tempo distribution
+                tempo = features.get("tempo", {})
+                if tempo:
+                    st.metric("Tempo", f"{tempo.get('median', 0):.0f} BPM",
+                              f"Range: {tempo.get('min', 0):.0f} - {tempo.get('max', 0):.0f}")
+
+                # Mode split
+                mode = features.get("mode_split", {})
+                if mode:
+                    fig_mode = go.Figure(data=go.Pie(
+                        labels=["Major", "Minor"],
+                        values=[mode.get("major", 0), mode.get("minor", 0)],
+                        marker_colors=["#1DB954", "#535353"],
+                        hole=0.4,
+                    ))
+                    fig_mode.update_layout(title="Major vs Minor", height=300)
+                    st.plotly_chart(fig_mode, use_container_width=True)
+
+            with col_right:
+                # Key distribution
+                key_dist = features.get("key_distribution", {})
+                if key_dist:
+                    fig_keys = go.Figure(data=go.Bar(
+                        x=list(key_dist.keys()),
+                        y=list(key_dist.values()),
+                        marker_color="#1DB954",
+                    ))
+                    fig_keys.update_layout(
+                        title="Key Distribution",
+                        xaxis_title="Key",
+                        yaxis_title="Frequency",
+                        height=350,
+                    )
+                    st.plotly_chart(fig_keys, use_container_width=True)
 
         # Top artists
         top_artists = sonic.get("top_artists", [])

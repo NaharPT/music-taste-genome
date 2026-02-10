@@ -106,8 +106,12 @@ class SpotifyCollector:
                 "track_id": track["id"],
                 "name": track["name"],
                 "artists": [artist["name"] for artist in track["artists"]],
+                "artist_ids": [artist["id"] for artist in track["artists"]],
                 "album_name": track["album"]["name"],
                 "duration_ms": track["duration_ms"],
+                "popularity": track.get("popularity", 0),
+                "explicit": track.get("explicit", False),
+                "release_date": track.get("album", {}).get("release_date", ""),
                 "played_at": item["played_at"],
                 "source": "recently_played"
             })
@@ -140,8 +144,12 @@ class SpotifyCollector:
                 "track_id": track["id"],
                 "name": track["name"],
                 "artists": [artist["name"] for artist in track["artists"]],
+                "artist_ids": [artist["id"] for artist in track["artists"]],
                 "album_name": track["album"]["name"],
                 "duration_ms": track["duration_ms"],
+                "popularity": track.get("popularity", 0),
+                "explicit": track.get("explicit", False),
+                "release_date": track.get("album", {}).get("release_date", ""),
                 "source": f"top_{time_range}"
             })
 
@@ -180,8 +188,12 @@ class SpotifyCollector:
                     "track_id": track["id"],
                     "name": track["name"],
                     "artists": [artist["name"] for artist in track["artists"]],
+                    "artist_ids": [artist["id"] for artist in track["artists"]],
                     "album_name": track["album"]["name"],
                     "duration_ms": track["duration_ms"],
+                    "popularity": track.get("popularity", 0),
+                    "explicit": track.get("explicit", False),
+                    "release_date": track.get("album", {}).get("release_date", ""),
                     "added_at": item["added_at"],
                     "source": "saved_library"
                 })
@@ -220,34 +232,85 @@ class SpotifyCollector:
             batch = track_ids[i:i + batch_size]
             params = {"ids": ",".join(batch)}
 
-            data = self._request("/audio-features", params)
+            try:
+                data = self._request("/audio-features", params)
 
-            for features in data.get("audio_features", []):
-                if features is None:
-                    # Some tracks may not have audio features
-                    continue
+                for features in data.get("audio_features", []):
+                    if features is None:
+                        # Some tracks may not have audio features
+                        continue
 
-                track_id = features["id"]
-                features_map[track_id] = {
-                    "tempo": features.get("tempo"),
-                    "key": features.get("key"),
-                    "mode": features.get("mode"),
-                    "energy": features.get("energy"),
-                    "valence": features.get("valence"),
-                    "danceability": features.get("danceability"),
-                    "acousticness": features.get("acousticness"),
-                    "instrumentalness": features.get("instrumentalness"),
-                    "loudness": features.get("loudness"),
-                    "speechiness": features.get("speechiness"),
-                    "liveness": features.get("liveness"),
-                    "time_signature": features.get("time_signature")
-                }
+                    track_id = features["id"]
+                    features_map[track_id] = {
+                        "tempo": features.get("tempo"),
+                        "key": features.get("key"),
+                        "mode": features.get("mode"),
+                        "energy": features.get("energy"),
+                        "valence": features.get("valence"),
+                        "danceability": features.get("danceability"),
+                        "acousticness": features.get("acousticness"),
+                        "instrumentalness": features.get("instrumentalness"),
+                        "loudness": features.get("loudness"),
+                        "speechiness": features.get("speechiness"),
+                        "liveness": features.get("liveness"),
+                        "time_signature": features.get("time_signature")
+                    }
 
-            if len(track_ids) > batch_size:
-                print(f"Progress: {min(i + batch_size, len(track_ids))}/{len(track_ids)} tracks processed")
+                if len(track_ids) > batch_size:
+                    print(f"Progress: {min(i + batch_size, len(track_ids))}/{len(track_ids)} tracks processed")
+
+            except requests.HTTPError as e:
+                if e.response.status_code == 403:
+                    print("\nWARNING: Audio features endpoint returned 403 Forbidden.")
+                    print("This is a known restriction for new Spotify apps since late 2024.")
+                    print("Genre-based profiling will be used as a fallback.\n")
+                    return {}
+                else:
+                    raise
 
         print(f"Retrieved audio features for {len(features_map)} tracks")
         return features_map
+
+    def get_artist_details(self, artist_ids: list[str]) -> dict:
+        """
+        Batch fetch artist details including genres.
+
+        Args:
+            artist_ids: List of Spotify artist IDs (up to 50 per request)
+
+        Returns:
+            Dictionary mapping artist_id to {"name": str, "genres": list, "popularity": int}
+        """
+        if not artist_ids:
+            return {}
+
+        print(f"Fetching artist details for {len(artist_ids)} artists...")
+        artist_map = {}
+        batch_size = 50
+
+        # Process in batches of 50
+        for i in range(0, len(artist_ids), batch_size):
+            batch = artist_ids[i:i + batch_size]
+            params = {"ids": ",".join(batch)}
+
+            data = self._request("/artists", params)
+
+            for artist in data.get("artists", []):
+                if artist is None:
+                    continue
+
+                artist_id = artist["id"]
+                artist_map[artist_id] = {
+                    "name": artist.get("name", ""),
+                    "genres": artist.get("genres", []),
+                    "popularity": artist.get("popularity", 0)
+                }
+
+            if len(artist_ids) > batch_size:
+                print(f"Progress: {min(i + batch_size, len(artist_ids))}/{len(artist_ids)} artists processed")
+
+        print(f"Retrieved details for {len(artist_map)} artists")
+        return artist_map
 
     def collect_full_profile(self, saved_limit=500) -> dict:
         """
@@ -343,7 +406,16 @@ class SpotifyCollector:
             else:
                 track["audio_features"] = None
 
-        # Extract unique artists
+        # 7. Fetch artist details for genre-based profiling
+        print("\n" + "=" * 60)
+        unique_artist_ids = set()
+        for track in unique_tracks:
+            artist_ids = track.get("artist_ids", [])
+            unique_artist_ids.update(artist_ids)
+
+        artist_details = self.get_artist_details(list(unique_artist_ids))
+
+        # Extract unique artist names
         unique_artists = set()
         for track in unique_tracks:
             unique_artists.update(track["artists"])
@@ -353,6 +425,7 @@ class SpotifyCollector:
             "collected_at": datetime.now().isoformat(),
             "sources": sources_count,
             "tracks": unique_tracks,
+            "artist_details": artist_details,
             "unique_artists": sorted(unique_artists),
             "total_unique_tracks": len(unique_tracks),
             "total_unique_artists": len(unique_artists),
