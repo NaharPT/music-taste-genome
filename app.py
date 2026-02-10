@@ -385,7 +385,7 @@ elif st.session_state.step == "results":
         with sig_cols[0]:
             top_genres = genre_profile.get("top_genres", [])
             if top_genres:
-                st.metric("Top Genre", top_genres[0].get("genre", "?").title(), f"{top_genres[0].get('pct', 0):.0f}%")
+                st.metric("Top Genre", top_genres[0].get("genre", "?").title(), f"{top_genres[0].get('percentage', 0):.0f}%")
 
         with sig_cols[1]:
             macro = genre_profile.get("macro_categories", {})
@@ -445,7 +445,7 @@ elif st.session_state.step == "results":
             top_genres = genre_profile.get("top_genres", [])[:15]
             if top_genres:
                 fig_genres = go.Figure(data=go.Bar(
-                    x=[g["pct"] for g in top_genres],
+                    x=[g["percentage"] for g in top_genres],
                     y=[g["genre"].title() for g in top_genres],
                     orientation="h",
                     marker_color="#1DB954",
