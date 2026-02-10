@@ -14,14 +14,16 @@ class SpotifyCollector:
 
     BASE_URL = "https://api.spotify.com/v1"
 
-    def __init__(self, auth):
+    def __init__(self, auth=None, access_token=None):
         """
         Initialize Spotify collector.
 
         Args:
-            auth: SpotifyAuthenticator instance for token management
+            auth: SpotifyAuthenticator instance for token management (CLI mode)
+            access_token: Direct access token string (web mode)
         """
         self.auth = auth
+        self._access_token = access_token
         self.cache_dir = Path("data/cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._rate_limit_delay = 1.0  # seconds between requests
@@ -51,8 +53,13 @@ class SpotifyCollector:
             if elapsed < self._rate_limit_delay:
                 time.sleep(self._rate_limit_delay - elapsed)
 
-            # Get valid token (auto-refresh if needed)
-            token = self.auth.get_valid_token()
+            # Get valid token
+            if self._access_token:
+                token = self._access_token
+            elif self.auth:
+                token = self.auth.get_valid_token()
+            else:
+                raise RuntimeError("No auth method configured")
             headers = {"Authorization": f"Bearer {token}"}
 
             self._last_request_time = time.time()
@@ -242,7 +249,7 @@ class SpotifyCollector:
         print(f"Retrieved audio features for {len(features_map)} tracks")
         return features_map
 
-    def collect_full_profile(self) -> dict:
+    def collect_full_profile(self, saved_limit=500) -> dict:
         """
         End-to-end collection of listening profile with audio features.
 
@@ -302,7 +309,7 @@ class SpotifyCollector:
 
         # 5. Saved library
         try:
-            saved = self.get_saved_tracks(limit=500)
+            saved = self.get_saved_tracks(limit=saved_limit)
             collected_tracks.extend(saved)
             sources_count["saved_library"] = len(saved)
         except Exception as e:
